@@ -27,8 +27,6 @@
 big_b_and_M_future <- function(h, n_draws, n_var, n_p,
                                data_ = NULL, matrices = NULL,
                                n_cores = NULL) {
-  
-  # Get matrices from calling environment if not provided
   if (is.null(matrices)) {
     if (exists("matrices", envir = parent.frame())) {
       matrices <- get("matrices", envir = parent.frame())
@@ -37,71 +35,95 @@ big_b_and_M_future <- function(h, n_draws, n_var, n_p,
     }
   }
   
-  # Get data from matrices if not provided
   if (is.null(data_)) {
     data_ <- matrices$Z
   }
   
-  # Draws to use (here: 1..n_draws, adapt if you want subsampling)
-  draws_to_use <- seq_len(n_draws)
-  
-  # Set up future plan
   if (is.null(n_cores)) {
     n_cores <- future::availableCores()
   }
-  future::plan(future::multisession, workers = n_cores)
+  if (!is.numeric(n_cores) || length(n_cores) != 1 || is.na(n_cores) || n_cores < 1) {
+    stop("n_cores must be a single integer >= 1")
+  }
+  n_cores <- as.integer(n_cores)
   
-  # Parallel over draws: each call returns b_h (length n_var) and M_h (list length h)
+  draws_to_use <- seq_len(n_draws)
+  old_plan <- future::plan()
+  on.exit(future::plan(old_plan), add = TRUE)
+  
+  if (n_cores == 1L) {
+    future::plan(future::sequential)
+  } else {
+    future::plan(future::multisession, workers = n_cores)
+  }
+  
   per_draw <- future.apply::future_lapply(
     draws_to_use,
     function(d) {
-      mat_forc_one(
-        h       = h,
-        n_var   = n_var,
-        n_p     = n_p,
-        data_   = data_,
+      out <- mat_forc_one(
+        h = h,
+        n_var = n_var,
+        n_p = n_p,
+        data_ = data_,
         matrices = matrices,
-        d       = d
+        d = d
       )
-    }
+      
+      if (is.null(out)) {
+        stop(sprintf("mat_forc_one returned NULL for draw %d", d))
+      }
+      
+      if (is.null(out$b_h) && !is.null(out[[1]])) {
+        out$b_h <- out[[1]]
+      }
+      if (is.null(out$M_h) && !is.null(out[[2]])) {
+        out$M_h <- out[[2]]
+      }
+      
+      if (is.null(out$b_h)) {
+        stop(sprintf("Missing b_h for draw %d", d))
+      }
+      if (is.null(out$M_h)) {
+        stop(sprintf("Missing M_h for draw %d", d))
+      }
+      if (length(out$b_h) != n_var * h) {
+        stop(sprintf("b_h has length %d for draw %d, expected %d", length(out$b_h), d, n_var * h))
+      }
+      if (!is.list(out$M_h) || length(out$M_h) != h) {
+        stop(sprintf("M_h must be a list of length h=%d for draw %d", h, d))
+      }
+      
+      out
+    },
+    future.seed = TRUE
   )
   
-  ## Assemble big_b: 1 x (n_var * h) x n_draws
-  # First build b_h_array: 1 x n_var x n_draws at horizon h
-  b_h_array <- abind::abind(
-    lapply(per_draw, function(x) matrix(x$b_h, nrow = 1)),
+  big_b <- abind::abind(
+    lapply(per_draw, function(x) array(x$b_h, dim = c(1, n_var * h, 1))),
     along = 3
   )
-  big_b <- array(0, dim = c(1, n_var * h, n_draws))
   
-  # Fill big_b block by block over horizons, following your original logic
-  for (cnt in seq_len(h)) {
-    # For horizon cnt, you want the mean at that horizon; here we use b_h_array (final horizon)
-    big_b[1, (1 + n_var * (cnt - 1)):(cnt * n_var), ] <- b_h_array
-  }
-  
-  ## Assemble big_M: (n_var * h) x (n_var * h) x n_draws
   big_M <- array(0, dim = c(n_var * h, n_var * h, n_draws))
   
-  # First aggregate M_h over draws for each horizon cnt: n_var x n_var x n_draws
-  M_h_global <- vector("list", h)
-  for (cnt in seq_len(h)) {
-    M_h_global[[cnt]] <- abind::abind(
-      lapply(per_draw, function(x) x$M_h[[cnt]]),
-      along = 3
-    )
-  }
-  
-  # Then fill big_M according to your original block structure
-  for (cnt in seq_len(h)) {
-    zz <- 1
-    for (cnt2 in cnt:h) {
-      big_M[(1 + n_var * (cnt - 1)):(cnt * n_var),
-            (1 + n_var * (cnt2 - 1)):(cnt2 * n_var), ] <- M_h_global[[zz]]
-      zz <- zz + 1
+  for (d in seq_len(n_draws)) {
+    M_h_draw <- per_draw[[d]]$M_h
+    for (cnt in seq_len(h)) {
+      zz <- 1
+      for (cnt2 in cnt:h) {
+        block <- M_h_draw[[zz]]
+        if (!is.matrix(block) || !all(dim(block) == c(n_var, n_var))) {
+          stop(sprintf(
+            "M_h[[%d]] for draw %d must be a %d x %d matrix",
+            zz, d, n_var, n_var
+          ))
+        }
+        big_M[(1 + n_var * (cnt - 1)):(cnt * n_var),
+              (1 + n_var * (cnt2 - 1)):(cnt2 * n_var),
+              d] <- block
+        zz <- zz + 1
+      }
     }
   }
   
-  list(big_b = big_b,
-       big_M = big_M)
+  list(big_b = big_b, big_M = big_M)
 }
