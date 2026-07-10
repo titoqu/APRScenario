@@ -1,16 +1,15 @@
-#' big_b_and_M
+#' Parallel big_b_and_M using lapply over draws
 #' This function returns the extended b and M matrices as in APR
-#'
 #' @param h forecast horison
 #' @param n_draws Number of draws
 #' @param n_var Number of variables
 #' @param n_p Number of lags
-#' @param n_core Number of parallel workers
 #' @param data_ (matrix optional) The data, stacking Y over X (data and laggs)
 #'        -- columns are observations (default taken from matrices$Z)
 #'        NB: this is not necessarily the same as the data used to estimate the model
 #'        If run counterfactuals in previoius historical period (ie not forecast) must pass the data up to previous period relative to counterfactual
 #' @param matrices Optional matrices object from gen_mats() (default taken from calling environment)
+#' @param n_cores Number of parallel workers
 #' @returns the big_b and big_M matrices of mean and IRF
 #' @examples
 #' \dontrun{
@@ -20,9 +19,6 @@
 #' big_b <- result[[1]]
 #' big_M <- result[[2]]
 #' }
-#' @export
-#' @import dplyr
-#' Parallel big_b_and_M using lapply over draws
 #' @export
 big_b_and_M_pl <- function(h, n_draws, n_var, n_p,
                                data_ = NULL, matrices = NULL,

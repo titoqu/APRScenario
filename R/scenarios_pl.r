@@ -1,6 +1,5 @@
-#' scenarios function (fully optimized with Rcpp)
+#' scenarios function PARALLELIZED (fully optimized with Rcpp)
 #' This function computes the mean and covariances to draw from the conditional forecast
-#' The actual draw is done in the simscen function
 #'
 #' @param h forecast horizon
 #' @param path conditional path of observables
@@ -32,7 +31,7 @@
 #'                               free_shocks = NA, 
 #'                               posterior = posterior, 
 #'                               matrices = matrices,
-#'                               n_cores)
+#'                               n_cores = 4)
 #' }
 #' @export
 #' @useDynLib APRScenario, .registration = TRUE
