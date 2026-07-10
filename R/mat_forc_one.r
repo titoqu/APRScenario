@@ -43,35 +43,93 @@
 #' @import dplyr
 
 mat_forc_one <- function(h, n_var, n_p, data_, matrices, d) {
-  # Build a "single-draw" matrices object
-  matrices_d <- matrices
   
-  # Subset M and intercept to draw d
-  matrices_d$M         <- matrices$M[, , d, drop = FALSE]
-  matrices_d$intercept <- matrices$intercept[, d, drop = FALSE]
+  K_0 <- diag(n_var)
+  K_h <- vector("list", h)
+  K_h[[1]] <- K_0
   
-  # Subset each B_list lag to draw d
-  matrices_d$B_list <- lapply(matrices$B_list, function(Bj) {
-    Bj[, , d, drop = FALSE]
-  })
+  if (h > 1) {
+    for (i in 2:h) {
+      tmp2 <- matrix(0, n_var, n_var)
+      
+      for (j in 1:(i - 1)) {
+        if (j <= n_p) {
+          tmp1 <- matrices$B_list[[j]][, , d]
+        } else {
+          tmp1 <- matrix(0, n_var, n_var)
+        }
+        
+        tmp2 <- tmp2 + K_h[[i - j]] %*% tmp1
+      }
+      
+      K_h[[i]] <- tmp2 + K_0
+    }
+  }
   
-  # Call existing mat_forc for n_draws = 1, sequential
-  res <- mat_forc(
-    h        = h,
-    n_draws  = 1L,
-    n_var    = n_var,
-    n_p      = n_p,
-    data_    = data_,
-    matrices = matrices_d,
-    max_cores = 1L
+  M_h <- vector("list", h)
+  M_h[[1]] <- matrices$M[, , d]
+  
+  if (h > 1) {
+    for (i in 2:h) {
+      tmp2 <- matrix(0, n_var, n_var)
+      
+      for (j in 1:min(i - 1, n_p)) {
+        tmp2 <- tmp2 + M_h[[j]] %*% matrices$B_list[[j]][, , d]
+      }
+      
+      M_h[[i]] <- tmp2
+    }
+  }
+  
+  N_p_list <- vector("list", n_p)
+  
+  for (l in seq_len(n_p)) {
+    tmp00 <- vector("list", h)
+    tmp00[[1]] <- matrices$B_list[[l]][, , d]
+    
+    if (h > 1) {
+      for (i in 2:h) {
+        tmp2 <- matrix(0, n_var, n_var)
+        
+        for (j in 1:min(i - 1, n_p)) {
+          tmp2 <- tmp2 +
+            tmp00[[i - j]] %*%
+            matrices$B_list[[j]][, , d]
+        }
+        
+        if ((l + i - 1) <= n_p) {
+          tmp <- matrices$B_list[[l + i - 1]][, , d]
+        } else {
+          tmp <- matrix(0, n_var, n_var)
+        }
+        
+        tmp00[[i]] <- tmp2 + tmp
+      }
+    }
+    
+    N_p_list[[l]] <- tmp00
+  }
+  
+  b_all <- matrix(0, n_var, h)
+  
+  for (hh in seq_len(h)) {
+    b_hh <- as.numeric(matrices$intercept[, d] %*% K_h[[hh]])
+    
+    for (cnt in seq_len(n_p)) {
+      y_lag <- data_[
+        (1 + n_var * (cnt - 1)):(n_var * cnt),
+        ncol(data_)
+      ]
+      
+      b_hh <- b_hh +
+        as.numeric(t(y_lag) %*% N_p_list[[cnt]][[hh]])
+    }
+    
+    b_all[, hh] <- b_hh
+  }
+  
+  list(
+    b_h = as.vector(b_all),
+    M_h = M_h
   )
-  
-  # res$b_h: 1 x n_var x 1, res$M_h: list of length h, each n_var x n_var x 1
-  b_h_vec <- drop(res$b_h[,,1])
-  M_h_list <- lapply(res$M_h, function(Mj) drop(Mj[,,1]))
-  
-  list(b_h = b_h_vec,
-       M_h = M_h_list)
 }
-
-
