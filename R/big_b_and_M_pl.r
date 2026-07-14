@@ -1,28 +1,29 @@
-#' Parallel big_b_and_M using lapply over draws
+#' Parallel big_b_and_M using parallel lapply (parLapply/mclapply) over draws
 #' This function returns the extended b and M matrices as in APR
-#' @param h forecast horison
+#' @param h Forecast horizon
 #' @param n_draws Number of draws
 #' @param n_var Number of variables
 #' @param n_p Number of lags
-#' @param data_ (matrix optional) The data, stacking Y over X (data and laggs)
+#' @param data_ (matrix optional) The data, stacking Y over X (data and lags)
 #'        -- columns are observations (default taken from matrices$Z)
 #'        NB: this is not necessarily the same as the data used to estimate the model
-#'        If run counterfactuals in previoius historical period (ie not forecast) must pass the data up to previous period relative to counterfactual
+#'        If running counterfactuals in previous historical period (ie not forecast) must pass the data up to the period prior to the counterfactual
 #' @param matrices Optional matrices object from gen_mats() (default taken from calling environment)
-#' @param n_cores Number of parallel workers
-#' @returns the big_b and big_M matrices of mean and IRF
+#' @param n_cores Number of parallel workers. If NULL (default), uses available cores minus one (preferring physical cores; falls back to logical if needed)
+#' @param mc if TRUE, use parallel::mclapply (Unix/macOS only). If FALSE (default), use parallel::parLapply. Do not set TRUE on Windows
+#' @returns List containing the big_b and big_M matrices (mean and IRF)
 #' @examples
 #' \dontrun{
 #' # Example usage for creating extended matrices
 #' result <- big_b_and_M(h = 4, n_draws = 1000, n_var = 3, n_p = 2,
-#'                       matrices = matrices)
+#'                       matrices = matrices, n_cores = NULL, mc = FALSE)
 #' big_b <- result[[1]]
 #' big_M <- result[[2]]
 #' }
 #' @export
 big_b_and_M_pl <- function(h, n_draws, n_var, n_p,
                                data_ = NULL, matrices = NULL,
-                               n_cores = NULL) {
+                               n_cores = NULL, mc = FALSE) {
   
   if (is.null(matrices)) {
     if (exists("matrices", envir = parent.frame())) {
@@ -37,36 +38,62 @@ big_b_and_M_pl <- function(h, n_draws, n_var, n_p,
   }
   
   if (is.null(n_cores)) {
-    n_cores <- max(1L, parallel::detectCores() - 1L)
+    # physical-first; leave one free; cap by n_draws; no NA
+    nc_phys <- suppressWarnings(parallel::detectCores(logical = FALSE))
+    nc <- if (is.na(nc_phys) || nc_phys < 1L) {
+      suppressWarnings(parallel::detectCores())  # logical fallback
+    } else nc_phys
+    n_cores <- as.integer(max(1L, min(nc - 1L, n_draws)))
   }
   
   n_cores <- min(as.integer(n_cores), n_draws)
   draws_to_use <- seq_len(n_draws)
   
-  cl <- parallel::makeCluster(n_cores, type = "PSOCK")
-  on.exit(parallel::stopCluster(cl), add = TRUE)
+  # another option is using (capabilities("fork")) as a logical statement (in case mclapply outperforms)
+  if(mc==TRUE){
+    per_draw <- parallel::mclapply(draws_to_use, function(d) {
+      out <- mat_forc_one(
+        h = h,
+        n_var = n_var,
+        n_p = n_p,
+        data_ = data_,
+        matrices = matrices,
+        d = d
+      )
+      
+      list(
+        b_h = out[[1L]],
+        M_h = out[[2L]]
+      )
+    }, mc.cores = n_cores)
+  }
   
-  parallel::clusterExport(
-    cl,
-    varlist = c("h", "n_var", "n_p", "data_", "matrices", "mat_forc_one"),
-    envir = environment()
-  )
-  
-  per_draw <- parallel::parLapply(cl, draws_to_use, function(d) {
-    out <- mat_forc_one(
-      h = h,
-      n_var = n_var,
-      n_p = n_p,
-      data_ = data_,
-      matrices = matrices,
-      d = d
+  else{
+    cl <- parallel::makeCluster(n_cores, type = "PSOCK")
+    on.exit(parallel::stopCluster(cl), add = TRUE)
+    
+    parallel::clusterExport(
+      cl,
+      varlist = c("h", "n_var", "n_p", "data_", "matrices", "mat_forc_one"),
+      envir = environment()
     )
     
-    list(
-      b_h = out[[1L]],
-      M_h = out[[2L]]
-    )
-  })
+    per_draw <- parallel::parLapply(cl, draws_to_use, function(d) {
+      out <- mat_forc_one(
+        h = h,
+        n_var = n_var,
+        n_p = n_p,
+        data_ = data_,
+        matrices = matrices,
+        d = d
+      )
+      
+      list(
+        b_h = out[[1L]],
+        M_h = out[[2L]]
+      )
+    })
+  }
   
   big_b <- abind::abind(
     lapply(per_draw, function(x) {

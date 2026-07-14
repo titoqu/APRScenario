@@ -12,8 +12,9 @@
 #' @param Sigma_g Optional covariance matrix of non-driving shocks
 #' @param posterior Optional posterior object (default taken from calling environment)
 #' @param matrices Optional matrices object from gen_mats() (default taken from calling environment)
-#' @param n_cores Number of workers to estimate big_b, big_M in parallel (<= n_draws)
-#'
+#' @param n_cores Number of parallel workers. If NULL (default), uses available cores minus one
+#' @param mc if TRUE, use parallel::mclapply (Unix/macOS only). If FALSE (default), use parallel::parLapply. Do not set TRUE on Windows
+
 #' @return list of mu_eps, Sigma_eps, mu_y, Sigma_y, big_b, big_M, draws_used
 #' @examples
 #' \donttest{
@@ -48,7 +49,8 @@ scenarios_pl <- function(h = 3,
                       g = NULL, Sigma_g = NULL,
                       posterior = NULL,
                       matrices = NULL,
-                      n_cores=1) {
+                      n_cores = NULL,
+                      mc = FALSE) {
   
   # Get matrices from calling environment if not provided
   if(is.null(matrices)) {
@@ -88,7 +90,7 @@ scenarios_pl <- function(h = 3,
   n_p<-(dim(posterior$posterior$A)[2]-1)/n_var
   n_draws<-dim(posterior$posterior$B)[3]
   if(is.null(n_sample))n_sample<-n_draws
-  tmp <- big_b_and_M_pl(h = h, n_draws = n_draws, n_cores=n_cores, n_var = n_var, n_p = n_p, data_ = data_)
+  tmp <- big_b_and_M_pl(h = h, n_draws = n_draws, n_var = n_var, n_p = n_p, data_ = data_, n_cores = n_cores, mc = mc)
   big_b <- tmp[[1]]
   big_M <- tmp[[2]]
 
